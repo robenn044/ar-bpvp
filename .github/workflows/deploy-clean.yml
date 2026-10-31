@@ -1,0 +1,54 @@
+name: DEPLOY-ON-COMMAND
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+jobs:
+  test:
+    name: test
+    if: >-
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/deploy') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+    steps:
+      # the issue_comment payload carries no head SHA, only issue.number
+      - name: resolve the pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} --jq .head.sha)
+          echo "RESOLVED_HEAD=$SHA"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+      - name: run the contributor's tests
+        run: bash ci/test.sh
+
+  deploy:
+    name: deploy
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      deployments: write
+    steps:
+      # no checkout, no contributor content, no repository secret: this job only names a revision
+      - name: deploy the revision the maintainer vouched for
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.test.outputs.sha }}
+        run: |
+          echo "DEPLOYING=$SHA"
+          gh api -X POST repos/${{ github.repository }}/deployments \
+            -f ref="$SHA" -f environment=production -F auto_merge=false \
+            -f description="deploy from /deploy command" \
+            -f 'required_contexts[]' --jq '"DEPLOYMENT_ID=" + (.id|tostring) + " DEPLOYMENT_SHA=" + .sha'
