@@ -1,0 +1,36 @@
+name: DEPLOY-ON-COMMAND
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+jobs:
+  deploy-on-command:
+    name: deploy-on-command
+    if: >-
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/deploy') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # The issue_comment payload carries no head SHA, only issue.number, so the head must be
+      # looked up while the job runs. There is no alternative for this trigger.
+      - name: resolve the pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.issue.number }} --jq .head.sha)
+          echo "RESOLVED_HEAD=$SHA branch=main"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+      - name: deploy the revision the maintainer vouched for
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: bash ci/deploy.sh
